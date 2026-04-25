@@ -47,6 +47,7 @@ The output videos can be found in `ux0:video` and are automatically imported in 
 ## Known Issues
 - Audio recording is not always available and it tends to desync compared to video.
 - Applications running at higher than 30 FPS will slowdown to 30 FPS and the final video will result slowed down.
+- Applications running this plugin will take slightly longer to boot.
 
 ## Credits
 - CatoTheYounger and hatoving for testing the plugin.
