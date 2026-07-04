@@ -3,6 +3,7 @@
 #include <libk/stdlib.h>
 #include <libk/stdio.h>
 #include <libk/string.h>
+#include "mp4rec.h" /* reconstructed SceLibMp4Recorder bindings (see header) */
 #include "renderer.h"
 
 #define ALIGN(x, a) (((x) + ((a)-1)) & ~((a)-1))
@@ -168,8 +169,13 @@ void checkInput(SceCtrlData *ctrl) {
 		}else if ((ctrl->buttons & SCE_CTRL_TRIANGLE) && (!(old_buttons & SCE_CTRL_TRIANGLE))) {
 			status = NOT_TRIGGERED;
 		}
-	} else if ((ctrl->buttons & SCE_CTRL_LTRIGGER) && (ctrl->buttons & SCE_CTRL_SELECT)) {
+	/* Config menu: R + START. Moved off the original L + SELECT because that is a
+	 * subset of the psp2fuse overlay's L + R + SELECT toggle -- pressing the overlay
+	 * chord also opened this menu. R + START shares no 2-button subset with
+	 * L + R + SELECT, so the two coexist. */
+	} else if ((ctrl->buttons & SCE_CTRL_RTRIGGER) && (ctrl->buttons & SCE_CTRL_START)) {
 		status = CONFIG_MENU;
+	/* Record toggle: L + START (unchanged; not a subset of L + R + SELECT). */
 	} else if (((ctrl->buttons & SCE_CTRL_LTRIGGER) && (ctrl->buttons & SCE_CTRL_START))
 		&& (!((old_buttons & SCE_CTRL_LTRIGGER) && (old_buttons & SCE_CTRL_START)))) {
 		alterRecordingState();
@@ -250,6 +256,18 @@ int sceDisplaySetFrameBuf_patched(const SceDisplayFrameBuf *pParam, int sync) {
 		}
 	}
 	
+	// Let the game AND every downstream display hook finish compositing into the
+	// framebuffer before we grab it. sceDisplaySetFrameBuf can be hooked by
+	// several plugins at once (e.g. the psp2fuse overlay, which blits its panel
+	// into pParam->base inside its own hook). taiHEN runs those hooks as a chain:
+	// whichever plugin loaded last runs first and only reaches the others -- and
+	// the real present -- through TAI_CONTINUE. If we captured here, before
+	// TAI_CONTINUE, and our hook happened to run first, we'd encode the raw game
+	// frame and miss any overlay a later-chained hook paints in. Capturing after
+	// TAI_CONTINUE reads the finished, on-screen frame regardless of hook order,
+	// so on-screen overlays end up in the recording too.
+	int ret = TAI_CONTINUE(int, ref[0], pParam, sync);
+
 	// FIXME: sceMp4Rec records at hardcoded 30 FPS. With the way we do recording we cause hard lock at 30 FPS on 60 FPS games.
 	if (is_recording) {
 		int vcurr = vts * (SCE_MP4REC_COMMON_DENOM_TIMESCALE / SCE_MP4REC_VIDEO_TIMESCALE);
@@ -273,12 +291,15 @@ int sceDisplaySetFrameBuf_patched(const SceDisplayFrameBuf *pParam, int sync) {
 			sceMp4RecAddVideoSample(&r, csc_ptr, internal_csc_size);
 			vts += SCE_MP4REC_VIDEO_SAMPLE_DURATION;
 		}
+		// Draw the on-screen "R" indicator AFTER the capture above so it stays
+		// out of the recorded video (the original intent). Post-present writes
+		// to pParam->base still land on the buffer being scanned out.
 		setTextColor(0xFF0000FF);
 		drawString(5, 5, "R");
 		setTextColor(0x00FFFFFF);
 	}
-	
-	return TAI_CONTINUE(int, ref[0], pParam, sync);
+
+	return ret;
 }
 
 int genericInputDisable(int idx, int port, SceCtrlData *ctrl, int count, int is_negative) {
